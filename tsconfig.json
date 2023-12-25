@@ -1,0 +1,13 @@
+{
+  "extends": "@tsconfig/node20/tsconfig.json",
+  "compilerOptions": {
+    "target": "es2017",
+    "module": "esnext",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "baseUrl": "./src",
+    "sourceMap": true
+  }
+}
