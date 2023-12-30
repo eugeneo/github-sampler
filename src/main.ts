@@ -1,7 +1,8 @@
 import dotenv from "dotenv";
 import yargs from "yargs";
 
-import { Downloader, DownloaderOptions, Language } from "./downloader.js";
+import { Downloader, DownloaderOptions } from "downloader";
+import { Language } from "types";
 
 dotenv.config();
 
@@ -10,22 +11,9 @@ type RepoId = {
   name: string;
 };
 
-async function fetchFiles(
-  repo: RepoId,
-  dir: string,
-  options: Omit<DownloaderOptions, "githubToken">
-) {
-  const downloader = new Downloader(repo, {
-    githubToken: process.env.GITHUB_TOKEN!,
-    ...options,
-  });
-  if (!options.include?.length) {
-    await downloader.processDir(null);
-  } else {
-    await Promise.all(
-      options.include!.map((dir) => downloader.processDir(dir))
-    );
-  }
+async function downloadCommand(params: DownloaderOptions) {
+  console.info(params);
+  throw new Error("Not implemented");
 }
 
 // setup default yargs command
@@ -60,28 +48,15 @@ const argv = await yargs(process.argv.slice(2))
           alias: "I",
         });
     },
-    async (argv) => {
-      console.log(argv);
-      const language = argv.language as Language[];
-      const { directory, repository, ...rest } = argv as unknown as Omit<
-        DownloaderOptions,
-        "githubToken"
-      > & {
-        directory: string;
-        repository: RepoId;
-      };
-      fetchFiles(repository, directory, {
-        ...rest,
-        languages: new Set(language),
-      });
+    (argv) => {
+      downloadCommand(argv as unknown as DownloaderOptions);
     }
   )
   .options({
-    "concurrent-requests": {
-      alias: "j",
-      description: "number of concurrent downloads",
+    qps: {
+      description: "number of GitHub API requests per second",
       type: "number",
-      default: 5,
+      default: 20,
     },
     "dry-run": {
       description: "Do not perform any modifications to local file system",

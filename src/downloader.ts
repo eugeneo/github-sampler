@@ -1,33 +1,13 @@
 import path from "path";
 
 import winston from "winston";
-import * as z from "zod";
 
-import { getLogger } from "./logger.js";
-
-const File = z.object({
-  git_url: z.string(),
-  name: z.string(),
-  path: z.string(),
-  type: z.string(),
-  sha: z.string(),
-  url: z.string(),
-  size: z.number(),
-});
-
-const ContentsResponse = z.array(File);
-
-export enum Language {
-  ALL = "all",
-  UNKNOWN = "unknown",
-  CPP = "cpp",
-  JAVA = "java",
-}
+import { Database, DatabaseSchema, FileRecord } from "./database";
+import { GithubApi } from "./github_api";
+import { getLogger } from "./logger";
+import { File, Language, Repository } from "./types";
 
 export type DownloaderOptions = {
-  githubToken: string;
-  concurrentRequests: number;
-  include?: string[];
   maxSize: number;
   minSize: number;
   languages: Set<Language>;
@@ -54,130 +34,104 @@ function getFileLanguage(filePath: string): Language {
     case ".java":
       return Language.JAVA;
   }
+  return Language.UNKNOWN;
+}
+
+type SaveResult = [string, string];
+
+function mergeDatabases(db1: Database, db2: Database): Database {
+  const files = { ...db1.files, ...db2.files };
+  const known = { ...db1.known, ...db2.known };
+  const visited = [...new Set([...db1.visited, ...db2.visited])];
+  return { files, known, visited };
 }
 
 export class Downloader {
   constructor(
-    private readonly repository_: { owner: string; name: string },
-    private readonly options_: DownloaderOptions
+    private githubApi: GithubApi,
+    private readonly save: (
+      file: File,
+      contents: string
+    ) => Promise<SaveResult>,
+    private readonly database: Database,
+    private readonly options: DownloaderOptions
   ) {
-    console.debug(options_);
+    console.debug(options);
     this.logger_ = getLogger("downloader");
   }
 
-  async processDir(path: string | null): Promise<void> {
-    if (path && this.downloads_ >= this.options_.concurrentRequests) {
-      this.logger_.debug(`Pushing ${path} to pending dirs`);
-      this.pending_dirs_.unshift(path);
-      return;
-    }
-    this.logger_.info(
-      `Processing dir ${this.repository_.owner}/${this.repository_.name}, ${
-        path ? `subdir ${path}` : "repository root"
-      }`
-    );
-    this.downloads_++;
-    try {
-      const contents = ContentsResponse.parse(
-        JSON.parse(
-          await this.githubRequest(
-            `https://api.github.com/repos/${this.repository_.owner}/${
-              this.repository_.name
-            }/contents/${path?.trim() ? path.trim() : ""}`
-          )
-        )
-      );
-      this.logger_.info(
-        `${path ? path : "Repository root"} has ${contents.length} files`
-      );
-      for (const file of contents) {
-        if (file.type !== "dir") {
-          this.logger_.debug(`Downloading ${file.path}`);
-          this.downloadFile(file);
-        } else {
-          this.processDir(file.path);
+  async processRepository(
+    repository: Repository,
+    includes: string[] | null
+  ): Promise<Database> {
+    const result = await this.processDir(repository, null);
+    return DatabaseSchema.parse(mergeDatabases(this.database, result));
+  }
+
+  private async processDir(
+    repository: Repository,
+    path: string | null
+  ): Promise<Database> {
+    const result = await this.githubApi.listFiles(repository, path);
+    const downloaded = await Promise.all(
+      result.map(async (file): Promise<Database> => {
+        try {
+          if (file.type === "dir") {
+            return await this.processDir(repository, file.path);
+          } else if (this.isRelevant(file)) {
+            return {
+              files: await this.processFile(file),
+              visited: [],
+              known: {},
+            };
+          }
+        } catch (e) {
+          this.logger_.error(`Error processing ${file.path}`, e);
         }
-      }
-      // this.pending_downloads_.push(...contents);
-      // while (this.pending_downloads_.length > 0) {
-      //   const file = this.pending_downloads_.pop()!;
-      //   if (file.type === "dir") {
-      //     this.logger_.debug(`Pushing ${file.path} to pending dirs`);
-      //     this.pending_dirs_.push(file.path);
-      //   } else {
-      //     this.logger_.debug(`Downloading ${file.path}`);
-      //     // this.downloadFile(file);
-      //   }
-      // }
-      // while (this.pending_downloads_.length > 0) {
-      //   const file = this.pending_downloads_.pop()!;
-      //   if (file.type === "dir") {
-      //     // console.log(file.path, file.git_url, file.url);
-      //     // this.pending_downloads_.push(...ContentsResponse.parse(
-      //     //   await this.githubRequest(file.path)
-      //     // ));
-      //   } else {
-
-      //     // console.log(file.git_url, file.sha);
-      //     // this.downloadFile(file);
-      //   }
-      // }
-    } catch (e) {
-      this.logger_.error(
-        `Failed to process ${path ? path : "repository root"}`,
-        e
-      );
-    } finally {
-      this.downloads_--;
-    }
-  }
-
-  private async downloadFile(file: z.infer<typeof File>) {
-    if (!this.isRelevant(file)) {
-      return;
-    }
-    const contents = await this.githubRequest(
-      file.git_url,
-      "application/vnd.github.raw"
+        return { files: {}, visited: [], known: {} };
+      })
     );
-    console.log(contents);
-    throw new Error("Implement saving the file!");
+    return downloaded.reduce(mergeDatabases);
   }
 
-  private isRelevant({ path, size }: z.infer<typeof File>) {
-    if (size < this.options_.minSize || size > this.options_.maxSize) {
+  private async processFile(file: File): Promise<Database["files"]> {
+    let dest_or_error: { destination: string } | { error: string } | null =
+      null;
+    try {
+      const contents = await this.githubApi.downloadFile(file);
+      const result = await this.save(file, contents);
+      this.logger_.debug(`Downloaded ${file.path}`);
+      dest_or_error = { destination: result[0] };
+    } catch (e) {
+      this.logger_.error(`Error downloading ${file.path}`, e);
+      dest_or_error = { error: (e as any).message ?? String(e) };
+    }
+    return {
+      [file.sha]: {
+        ...file,
+        ...dest_or_error,
+        language: getFileLanguage(file.path),
+        type: "file",
+      },
+    };
+  }
+
+  private isRelevant({ path, size }: File) {
+    if (size < this.options.minSize || size > this.options.maxSize) {
       this.logger_.debug(`Skipping ${path} due to size: ${size}`);
       return false;
     }
     const language = getFileLanguage(path);
     if (
-      !this.options_.languages.has(Language.ALL) &&
-      !this.options_.languages.has(language)
+      language === Language.UNKNOWN ||
+      (!this.options.languages.has(Language.ALL) &&
+        !this.options.languages.has(language))
     ) {
-      this.logger_.debug(`Skipping ${path} due to language: ${language}`);
+      this.logger_.debug(`Skipping ${path}, language is: ${language}`);
       return false;
     }
     return true;
   }
 
-  private async githubRequest(
-    url: string,
-    contentType = "application/vnd.github+json"
-  ) {
-    const result = await fetch(url, {
-      headers: {
-        Accept: contentType,
-        Authorization: `Bearer ${this.options_.githubToken}`,
-        "X-GitHub-Api-Version": "2022-11-28",
-      },
-    });
-    if (!result.ok) {
-      throw new Error(`Failed to fetch ${url}: ${result.statusText}`);
-    }
-    return await result.text();
-  }
-
   private readonly logger_: winston.Logger;
-  private downloads_ = 0;
-  private pending_dirs_: string[] = [];
 }
