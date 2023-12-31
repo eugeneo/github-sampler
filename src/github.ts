@@ -1,12 +1,24 @@
 import { ContentsResponse, File, Repository } from "./types";
 
+import { Tree, TreeSchema } from "./database";
+
 export interface GithubApi {
-  downloadFile(file: File): Promise<string>;
-  listFiles(repository: Repository, path: string | null): Promise<File[]>;
+  downloadFile(url: string): Promise<string>;
+  fetchTree(repository: Repository, sha: string): Promise<Tree>;
 }
 
 export class GithubApiImpl implements GithubApi {
   constructor(private readonly githubToken: string) {}
+
+  async fetchTree(repository: Repository, sha: string) {
+    return TreeSchema.parse(
+      JSON.parse(
+        await this.githubRequest(
+          `https://api.github.com/repos/${repository.owner}/${repository.name}/git/trees/${sha}?recursive=1`
+        )
+      )
+    );
+  }
 
   async listFiles(repository: Repository, path: string | null) {
     return ContentsResponse.parse(
@@ -20,9 +32,9 @@ export class GithubApiImpl implements GithubApi {
     );
   }
 
-  async downloadFile(file: File): Promise<string> {
+  async downloadFile(url: string): Promise<string> {
     const contents = await this.githubRequest(
-      file.git_url,
+      url,
       "application/vnd.github.raw"
     );
     console.log(contents);

@@ -1,35 +1,36 @@
 import z from "zod";
 
-import { Language } from "./types";
-
-// Zod is weird
-const languages = Object.values(Language).filter((v) => v !== Language.ALL) as [
-  string,
-  ...string[]
-];
-
-const FileSchema = z.object({
-  type: z.literal("file"),
-  name: z.string(),
-  language: z.enum(languages),
+const EntrySchema = z.object({
+  path: z.string(),
+  mode: z.string(),
+  type: z.enum(["blob", "tree", "commit"]),
   size: z.number(),
+  sha: z.string(),
   url: z.string(),
 });
 
-export type FileRecord = z.infer<typeof FileSchema>;
+export const TreeSchema = z.object({
+  sha: z.string(),
+  url: z.string(),
+  truncated: z.boolean(),
+  tree: z.array(EntrySchema),
+});
 
-export const DatabaseSchema = z.object({
-  files: z.record(
+export type Tree = z.infer<typeof TreeSchema>;
+
+export type Entry = z.infer<typeof EntrySchema>;
+
+export const DatabaseSchema = z.record(
+  z.intersection(
+    EntrySchema,
     z.intersection(
-      FileSchema,
       z.union([
         z.object({ destination: z.string() }),
         z.object({ error: z.string() }),
-      ])
+      ]),
+      z.object({ language: z.string() })
     )
-  ),
-  visited: z.array(z.string()),
-  known: z.record(FileSchema),
-});
+  )
+);
 
 export type Database = z.infer<typeof DatabaseSchema>;

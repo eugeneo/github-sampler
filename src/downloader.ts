@@ -2,15 +2,17 @@ import path from "path";
 
 import winston from "winston";
 
-import { Database, DatabaseSchema, FileRecord } from "./database";
-import { GithubApi } from "./github_api";
+import { Database, Entry } from "./database";
+import { GithubApi } from "./github";
 import { getLogger } from "./logger";
-import { File, Language, Repository } from "./types";
+import { Language, Repository } from "./types";
 
 export type DownloaderOptions = {
   maxSize: number;
   minSize: number;
   languages: Set<Language>;
+  dirs?: string[];
+  maxFiles?: number;
 };
 
 function getFileLanguage(filePath: string): Language {
@@ -37,20 +39,13 @@ function getFileLanguage(filePath: string): Language {
   return Language.UNKNOWN;
 }
 
-type SaveResult = [string, string];
-
-function mergeDatabases(db1: Database, db2: Database): Database {
-  const files = { ...db1.files, ...db2.files };
-  const known = { ...db1.known, ...db2.known };
-  const visited = [...new Set([...db1.visited, ...db2.visited])];
-  return { files, known, visited };
-}
+type SaveResult = string;
 
 export class Downloader {
   constructor(
     private githubApi: GithubApi,
     private readonly save: (
-      file: File,
+      file: Entry,
       contents: string
     ) => Promise<SaveResult>,
     private readonly database: Database,
@@ -62,61 +57,79 @@ export class Downloader {
 
   async processRepository(
     repository: Repository,
-    includes: string[] | null
+    rev: string
   ): Promise<Database> {
-    const result = await this.processDir(repository, null);
-    return DatabaseSchema.parse(mergeDatabases(this.database, result));
-  }
-
-  private async processDir(
-    repository: Repository,
-    path: string | null
-  ): Promise<Database> {
-    const result = await this.githubApi.listFiles(repository, path);
-    const downloaded = await Promise.all(
-      result.map(async (file): Promise<Database> => {
-        try {
-          if (file.type === "dir") {
-            return await this.processDir(repository, file.path);
-          } else if (this.isRelevant(file)) {
-            return {
-              files: await this.processFile(file),
-              visited: [],
-              known: {},
-            };
-          }
-        } catch (e) {
-          this.logger_.error(`Error processing ${file.path}`, e);
-        }
-        return { files: {}, visited: [], known: {} };
-      })
+    const tree = await this.githubApi.fetchTree(repository, rev);
+    const entriesToDownload = Object.values(
+      Object.fromEntries(
+        tree.tree
+          .filter((entry) => this.shouldDownload(entry))
+          .map((entry) => [entry.sha, entry] as const)
+      )
     );
-    return downloaded.reduce(mergeDatabases);
+    const downloaded = [];
+    const downloadPromises = Object.entries(this.database).map((entry) =>
+      Promise.resolve(entry)
+    );
+    while (entriesToDownload.length > 0 && downloaded.length < 1000) {
+      let i = Math.min(
+        entriesToDownload.length,
+        this.options.maxFiles
+          ? this.options.maxFiles - downloaded.length
+          : Number.POSITIVE_INFINITY
+      );
+      for (; i > 0; i--) {
+        const ind = Math.floor(Math.random() * entriesToDownload.length);
+        const [entry] = entriesToDownload.splice(ind, 1);
+        downloadPromises.push(this.processFile(entry));
+      }
+      downloaded.push(...(await Promise.all(downloadPromises)));
+    }
+    return Object.fromEntries(downloaded);
   }
 
-  private async processFile(file: File): Promise<Database["files"]> {
+  private async processFile(file: Entry): Promise<[string, Database[string]]> {
     let dest_or_error: { destination: string } | { error: string } | null =
       null;
     try {
-      const contents = await this.githubApi.downloadFile(file);
+      const contents = await this.githubApi.downloadFile(file.url);
       const result = await this.save(file, contents);
       this.logger_.debug(`Downloaded ${file.path}`);
-      dest_or_error = { destination: result[0] };
+      dest_or_error = { destination: result };
     } catch (e) {
       this.logger_.error(`Error downloading ${file.path}`, e);
       dest_or_error = { error: (e as any).message ?? String(e) };
     }
-    return {
-      [file.sha]: {
+    return [
+      file.sha,
+      {
         ...file,
         ...dest_or_error,
-        language: getFileLanguage(file.path),
-        type: "file",
+        language: getFileLanguage(file.path).toString(),
       },
-    };
+    ];
   }
 
-  private isRelevant({ path, size }: File) {
+  private shouldDownload({ path, size, sha, type }: Entry) {
+    if (type !== "blob") {
+      this.logger_.debug(`Skipping ${path}, not a file`);
+      return false;
+    }
+    if (
+      this.options.dirs &&
+      !this.options.dirs.some(
+        (dir) =>
+          (path.startsWith(dir) && path.length === dir.length) ||
+          path[dir.length] === "/"
+      )
+    ) {
+      this.logger_.debug(`Skipping ${path}, not in included paths`);
+      return false;
+    }
+    if (this.database[sha]) {
+      this.logger_.debug(`Skipping ${path}, already downloaded`);
+      return false;
+    }
     if (size < this.options.minSize || size > this.options.maxSize) {
       this.logger_.debug(`Skipping ${path} due to size: ${size}`);
       return false;

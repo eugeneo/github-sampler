@@ -36,16 +36,11 @@ const argv = await yargs(process.argv.slice(2))
             };
           },
         })
-        .positional("directory", {
+        .positional("sha", {
           description: "Directory to download files to",
           type: "string",
+          default: "master",
           normalize: true,
-        })
-        .option("include", {
-          description: "Directory to include",
-          type: "string",
-          array: true,
-          alias: "I",
         });
     },
     (argv) => {
@@ -59,14 +54,9 @@ const argv = await yargs(process.argv.slice(2))
       default: 20,
     },
     "dry-run": {
-      description: "Do not perform any modifications to local file system",
+      description: "Do not write to local file system",
       type: "boolean",
       default: false,
-    },
-    "max-dirs": {
-      description: "Maximum number of folders to visit",
-      type: "number",
-      default: 20,
     },
     "max-files": {
       description: "Maximum number of files to download",
@@ -93,5 +83,3 @@ const argv = await yargs(process.argv.slice(2))
   })
   .help()
   .requiresArg("repository").argv;
-
-type Options = typeof argv;
