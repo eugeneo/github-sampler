@@ -324,6 +324,55 @@ describe("Downloader", () => {
     expect(Object.keys(files)).toHaveLength(3);
   });
 
-  it.skip("handles when nothing to download", async () => {});
-  it.skip("skips files not matching criteria", async () => {});
+  it("handles when nothing to download", async () => {
+    const mockGithubApi = setupMockGithubApi({ k: fakeTree() });
+    const store = jest.fn(mockDownloader);
+    const downloader = new Downloader(
+      mockGithubApi,
+      (...args) => Promise.resolve(store(...args)),
+      {},
+      {
+        maxSize: 10000,
+        minSize: 0,
+        languages: new Set([Language.CPP]),
+      }
+    );
+    const files = await downloader.processRepository(DEFAULT_REPO, "k");
+    expect(Object.keys(files)).toHaveLength(0);
+  });
+
+  it("files not matching criteria", async () => {
+    const mockGithubApi = setupMockGithubApi(
+      {
+        t: fakeTree(
+          fakeEntry("f1.java", { size: 500 }),
+          fakeEntry("too_small.java", { size: 250 }),
+          fakeEntry("too_big.java", { size: 1050 }),
+          fakeEntry("f1.cpp", { size: 500 }),
+          fakeEntry("f2.java", { type: "tree", size: 500 })
+        ),
+      },
+      { "f1.java": "f1.java_contents" }
+    );
+    const store = jest.fn(mockDownloader);
+    const downloader = new Downloader(
+      mockGithubApi,
+      (...args) => Promise.resolve(store(...args)),
+      {},
+      {
+        maxSize: 1000,
+        minSize: 300,
+        languages: new Set([Language.JAVA]),
+      }
+    );
+    await expect(
+      downloader.processRepository(DEFAULT_REPO, "t")
+    ).resolves.toEqual({
+      "shaf1.java": {
+        ...fileIndexEntry("f1.java"),
+        language: "java",
+        size: 500,
+      },
+    });
+  });
 });
