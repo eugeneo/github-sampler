@@ -7,7 +7,7 @@ export const File = z.object({
   type: z.enum(["file", "dir"]),
   sha: z.string(),
   url: z.string(),
-  size: z.number(),
+  size: z.number().optional(),
 });
 
 export type File = z.infer<typeof File>;
@@ -16,9 +16,9 @@ export const ContentsResponse = z.array(File);
 
 export enum Language {
   ALL = "all",
-  UNKNOWN = "unknown",
   CPP = "cpp",
   JAVA = "java",
+  UNKNOWN = "unknown",
 }
 
 export type Repository = {

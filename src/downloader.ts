@@ -1,17 +1,16 @@
-import path from "path";
-
-import { Logger } from "winston";
-
 import { Database, Entry } from "./database";
 import { GithubApi } from "./github";
 import { getLogger } from "./logger";
+import { Counters, Stats } from "./stats";
 import { Language, Repository } from "./validator";
+import path from "path";
 
 export type DownloaderOptions = {
+  dirs?: string[];
   maxSize: number;
   minSize: number;
   languages: Set<Language>;
-  dirs?: string[];
+  logSkipped?: boolean;
   maxFiles?: number;
 };
 
@@ -51,15 +50,19 @@ export class Downloader {
     private readonly database: Database,
     private readonly options: DownloaderOptions
   ) {
-    console.debug(options);
-    this.logger_ = getLogger("downloader");
+    this.stats_ = new Stats(options.languages);
   }
 
   async processRepository(
     repository: Repository,
     rev: string
   ): Promise<Database> {
+    this.stats_.increment(
+      Counters.DatabaseFiles,
+      Object.keys(this.database).length
+    );
     const tree = await this.githubApi.fetchTree(repository, rev);
+    this.stats_.increment(Counters.TreeFiles, tree.tree.length);
     const entriesToDownload = Object.values(
       Object.fromEntries(
         tree.tree
@@ -67,6 +70,7 @@ export class Downloader {
           .map((entry) => [entry.sha, entry] as const)
       )
     );
+    this.stats_.increment(Counters.Matching, entriesToDownload.length);
     const downloaded = [];
     const downloadPromises = Object.entries(this.database).map((entry) =>
       Promise.resolve(entry)
@@ -89,30 +93,45 @@ export class Downloader {
   }
 
   private async processFile(file: Entry): Promise<[string, Database[string]]> {
-    let dest_or_error: { destination: string } | { error: string } | null =
-      null;
+    let destOrError: { destination: string } | { error: string } | null = null;
     try {
+      if (!file.url) {
+        throw new Error(`No url for ${file.path}`);
+      }
       const contents = await this.githubApi.downloadFile(file.url);
       const result = await this.save(file, contents);
       this.logger_.debug(`Downloaded ${file.path}`);
-      dest_or_error = { destination: result };
+      destOrError = { destination: result };
+      this.stats_.increment(Counters.Files);
     } catch (e) {
       this.logger_.error(`Error downloading ${file.path}`, e);
-      dest_or_error = { error: (e as any).message ?? String(e) };
+      destOrError = { error: (e as any).message ?? String(e) };
+      this.stats_.increment(Counters.Errors);
     }
     return [
       file.sha,
       {
         ...file,
-        ...dest_or_error,
+        ...destOrError,
         language: getFileLanguage(file.path).toString(),
       },
     ];
   }
 
   private shouldDownload({ path, size, sha, type }: Entry) {
+    const log = this.options.logSkipped ? this.logger_.debug : () => {};
     if (type !== "blob") {
-      this.logger_.debug(`Skipping ${path}, not a file`);
+      this.stats_.increment(Counters.NotFiles);
+      log(`Skipping ${path}, not a file`);
+      return false;
+    }
+    if (
+      size === undefined ||
+      size < this.options.minSize ||
+      size > this.options.maxSize
+    ) {
+      this.stats_.increment(Counters.WrongSize);
+      log(`Skipping ${path}, wrong size`);
       return false;
     }
     if (
@@ -123,28 +142,32 @@ export class Downloader {
           path[dir.length] === "/"
       )
     ) {
-      this.logger_.debug(`Skipping ${path}, not in included paths`);
+      this.stats_.increment(Counters.Excluded);
+      log(`Skipping ${path}, not in included paths`);
       return false;
     }
     if (this.database[sha]) {
-      this.logger_.debug(`Skipping ${path}, already downloaded`);
-      return false;
-    }
-    if (size < this.options.minSize || size > this.options.maxSize) {
-      this.logger_.debug(`Skipping ${path} due to size: ${size}`);
+      this.stats_.increment(Counters.AlreadyDownloaded);
+      log(`Skipping ${path}, already downloaded`);
       return false;
     }
     const language = getFileLanguage(path);
+    this.stats_.histogram(Counters.Language, language);
     if (
       language === Language.UNKNOWN ||
       (!this.options.languages.has(Language.ALL) &&
         !this.options.languages.has(language))
     ) {
-      this.logger_.debug(`Skipping ${path}, language is: ${language}`);
+      log(`Skipping ${path}, language is: ${language}`);
       return false;
     }
     return true;
   }
 
-  private readonly logger_: Logger;
+  stats() {
+    return this.stats_;
+  }
+
+  private readonly stats_: Stats;
+  private readonly logger_ = getLogger("downloader");
 }

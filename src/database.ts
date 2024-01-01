@@ -1,12 +1,13 @@
+import { getLogger } from "./logger";
 import z from "zod";
 
 const EntrySchema = z.object({
   path: z.string(),
   mode: z.string(),
   type: z.enum(["blob", "tree", "commit"]),
-  size: z.number(),
+  size: z.number().optional(),
   sha: z.string(),
-  url: z.string(),
+  url: z.string().optional(),
 });
 
 export const TreeSchema = z.object({
@@ -34,3 +35,13 @@ export const DatabaseSchema = z.record(
 );
 
 export type Database = z.infer<typeof DatabaseSchema>;
+
+export async function loadDatabase(path: string): Promise<Database> {
+  return {};
+}
+
+export async function saveDatabase(path: string, database: Database) {
+  getLogger("database").debug(
+    `Saving database with ${Object.keys(database).length} entries`
+  );
+}

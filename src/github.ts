@@ -33,12 +33,10 @@ export class GithubApiImpl implements GithubApi {
   }
 
   async downloadFile(url: string): Promise<string> {
-    const contents = await this.githubRequest(
+    return await this.githubRequest(
       url,
       "application/vnd.github.raw"
     );
-    console.log(contents);
-    throw new Error("Implement saving the file!");
   }
 
   private async githubRequest(
