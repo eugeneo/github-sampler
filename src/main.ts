@@ -4,6 +4,7 @@ import { GithubApiImpl } from "./github";
 import { Language, Repository } from "./validator";
 import chalk from "chalk";
 import dotenv from "dotenv";
+import path from "path";
 import yargs from "yargs";
 
 dotenv.config();
@@ -28,43 +29,34 @@ function dryRunStore(file: Entry, contents: string): Promise<string> {
   return Promise.resolve(file.path);
 }
 
-async function downloadCommand(params: typeof argv) {
+async function downloadCommand(
+  params: Awaited<typeof argv> & { directory: string }
+) {
   const token = process.env.GITHUB_TOKEN;
   if (!token) {
     throw new Error("GITHUB_TOKEN environment variable is required");
   }
-  new GithubApiImpl(token);
-  const {
-    dryRun,
-    include,
-    language,
-    logSkipped,
-    maxSize,
-    maxFiles,
-    minSize,
-    repository,
-    sha,
-  } = await params;
-  const store = dryRun ? dryRunStore : save;
+  const store = params.dryRun ? dryRunStore : save;
+  const databasePath = path.join(params.directory as string, params.indexName);
   const downloader = new Downloader(
     new GithubApiImpl(token),
     store,
-    await loadDatabase(""),
+    await loadDatabase(databasePath),
     {
-      dirs: include,
-      languages: new Set(language as Language[]),
-      logSkipped,
-      minSize: minSize,
-      maxSize: maxSize,
-      maxFiles: maxFiles,
+      dirs: params.include,
+      languages: new Set(params.language as Language[]),
+      logSkipped: params.logSkipped,
+      minSize: params.minSize,
+      maxSize: params.maxSize,
+      maxFiles: params.maxFiles,
     }
   );
   const result = await downloader.processRepository(
-    repository as Repository,
-    sha
+    params.repository as Repository,
+    params.sha
   );
-  if (!dryRun) {
-    saveDatabase("", result);
+  if (!params.dryRun) {
+    await saveDatabase(databasePath, result);
   }
   downloader.stats().print();
 }
@@ -96,9 +88,8 @@ const argv = yargs(process.argv.slice(2))
           normalize: true,
         });
     },
-    (argv) => {
-      // yargs do be trolling
-      downloadCommand(argv as any);
+    async (commandArgv) => {
+      await downloadCommand(commandArgv as any);
     }
   )
   .options({
@@ -111,6 +102,17 @@ const argv = yargs(process.argv.slice(2))
       description: "Do not write to local file system",
       type: "boolean",
       default: false,
+    },
+    include: {
+      alias: "i",
+      description: "Directories to include",
+      type: "string",
+      array: true,
+    },
+    "index-name": {
+      description: "Name of the index file",
+      type: "string",
+      default: "index.json",
     },
     "log-skipped": {
       description: "Log skipped files",
@@ -144,12 +146,6 @@ const argv = yargs(process.argv.slice(2))
       type: "string",
       default: "master",
       normalize: true,
-    },
-    include: {
-      alias: "i",
-      description: "Directories to include",
-      type: "string",
-      array: true,
     },
   })
   .help()

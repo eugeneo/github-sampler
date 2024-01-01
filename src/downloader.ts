@@ -79,7 +79,9 @@ export class Downloader {
       let i = Math.min(
         entriesToDownload.length,
         this.options.maxFiles
-          ? this.options.maxFiles - downloaded.length
+          ? this.options.maxFiles -
+              downloaded.length -
+              Object.values(this.database).length
           : Number.POSITIVE_INFINITY
       );
       for (; i > 0; i--) {
