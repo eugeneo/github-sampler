@@ -8,8 +8,8 @@
   "private": false,
   "type": "module",
   "scripts": {
-    "build": "tsc src",
-    "build:watch": "tsc -w src",
+    "build": "tsc",
+    "build:watch": "tsc -w",
     "lint": "eslint --ext .ts,.js ./src",
     "start": "node dist/main.js",
     "test": "jest",

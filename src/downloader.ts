@@ -1,6 +1,6 @@
 import path from "path";
 
-import winston from "winston";
+import { Logger } from "winston";
 
 import { Database, Entry } from "./database";
 import { GithubApi } from "./github";
@@ -146,5 +146,5 @@ export class Downloader {
     return true;
   }
 
-  private readonly logger_: winston.Logger;
+  private readonly logger_: Logger;
 }

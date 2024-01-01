@@ -1,14 +1,16 @@
-import winston from "winston";
+import { createLogger, format, transports } from "winston";
 
 export function getLogger(name: string) {
-  return winston.createLogger({
+  return createLogger({
     level: "debug",
-    format: winston.format.combine(
-      winston.format.cli(),
-      winston.format.timestamp(),
-      winston.format.errors({ stack: true })
+    format: format.combine(
+      format.cli(),
+      format.timestamp(),
+      format.errors({ stack: true })
     ),
-    transports: [new winston.transports.Console()],
+    transports: [
+      new transports.Console({ debugStdout: true, stderrLevels: ["error"] }),
+    ],
     defaultMeta: { name },
   });
 }

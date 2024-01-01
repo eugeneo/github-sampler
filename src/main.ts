@@ -1,8 +1,8 @@
 import dotenv from "dotenv";
 import yargs from "yargs";
 
-import { Downloader, DownloaderOptions } from "downloader";
-import { Language } from "types";
+import { DownloaderOptions } from "./downloader";
+import { Language } from "./types";
 
 dotenv.config();
 
