@@ -1,7 +1,7 @@
 import { Database, Entry, Tree } from "database";
 import { Downloader } from "../src/downloader";
 import { GithubApi } from "../src/github";
-import { Language, Repository } from "../src/types";
+import { Language, Repository } from "../src/validator";
 
 const NullKey = "<null>";
 const DEFAULT_REPO: Repository = { owner: "owner", name: "repo" };

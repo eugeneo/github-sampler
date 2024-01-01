@@ -1,4 +1,4 @@
-import { ContentsResponse, File, Repository } from "./types";
+import { ContentsResponse, File, Repository } from "./validator";
 
 import { Tree, TreeSchema } from "./database";
 

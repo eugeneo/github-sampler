@@ -1,4 +1,4 @@
-import { File } from "../src/types";
+import { File } from "../src/validator";
 
 export function fakeFile(
   name: string,

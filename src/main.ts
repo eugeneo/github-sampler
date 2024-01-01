@@ -1,8 +1,9 @@
 import dotenv from "dotenv";
 import yargs from "yargs";
 
-import { DownloaderOptions } from "./downloader";
-import { Language } from "./types";
+import { GithubApiImpl } from "./github";
+import { Downloader, DownloaderOptions } from "./downloader";
+import { Language } from "./validator";
 
 dotenv.config();
 
@@ -12,12 +13,18 @@ type RepoId = {
 };
 
 async function downloadCommand(params: DownloaderOptions) {
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) {
+    throw new Error("GITHUB_TOKEN environment variable is required");
+  }
+  new GithubApiImpl(token);
   console.info(params);
+  // new Downloader();
   throw new Error("Not implemented");
 }
 
 // setup default yargs command
-const argv = await yargs(process.argv.slice(2))
+const argv = yargs(process.argv.slice(2))
   .command(
     "$0 [options] <repository> <directory>",
     "Download files from GitHub",
@@ -83,3 +90,5 @@ const argv = await yargs(process.argv.slice(2))
   })
   .help()
   .requiresArg("repository").argv;
+
+console.log(argv);

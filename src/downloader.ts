@@ -5,7 +5,7 @@ import { Logger } from "winston";
 import { Database, Entry } from "./database";
 import { GithubApi } from "./github";
 import { getLogger } from "./logger";
-import { Language, Repository } from "./types";
+import { Language, Repository } from "./validator";
 
 export type DownloaderOptions = {
   maxSize: number;
