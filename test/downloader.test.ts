@@ -1,4 +1,4 @@
-import { Database, Entry, Tree } from "database";
+import { Database, Entry, Tree } from "../src/database";
 import { Downloader } from "../src/downloader";
 import { GithubApi } from "../src/github";
 import { Language, Repository } from "../src/validator";
@@ -40,15 +40,19 @@ async function safeGet<T>(map: Record<string, T | Error>, key: string | null) {
   return value;
 }
 
-function mockDownloader({ sha }: Entry, contents: string) {
-  return `${sha}/${contents}`;
+function mockDownloader(category: string, { sha }: Entry, contents: string) {
+  return `${category}/${sha}/${contents}`;
 }
 
-function fileIndexEntry(name: string, error?: string): Database[string] {
+function fileIndexEntry(
+  name: string,
+  category = "cpp",
+  error?: string
+): Database[string] {
   const entry = fakeEntry(name);
   const error_or_destination = error
     ? { error }
-    : { destination: mockDownloader(entry, `${name}_contents`) };
+    : { destination: mockDownloader(category, entry, `${name}_contents`) };
   return {
     ...entry,
     ...error_or_destination,
@@ -134,14 +138,17 @@ describe("Downloader", () => {
     );
     expect(mockGithubApi.downloadFile).toHaveBeenCalledTimes(3);
     expect(store).toHaveBeenCalledWith(
+      "cpp",
       expect.objectContaining({ path: "f1.cc" }),
       "f1.cc_contents"
     );
     expect(store).toHaveBeenCalledWith(
+      "cpp",
       expect.objectContaining({ path: "f2.cc" }),
       "f2.cc_contents"
     );
     expect(store).toHaveBeenCalledWith(
+      "cpp",
       expect.objectContaining({ path: "dir1/f3.cc" }),
       "dir1/f3.cc_contents"
     );
@@ -168,7 +175,7 @@ describe("Downloader", () => {
       downloader.processRepository(DEFAULT_REPO, "master")
     ).resolves.toEqual({
       "shaf1.cc": fileIndexEntry("f1.cc"),
-      "shaf2.cc": fileIndexEntry("f2.cc", "Failed to download file"),
+      "shaf2.cc": fileIndexEntry("f2.cc", "cpp", "Failed to download file"),
       "shadir1/f3.cc": fileIndexEntry("dir1/f3.cc"),
     });
   });
@@ -178,11 +185,11 @@ describe("Downloader", () => {
     const store = jest.fn(mockDownloader);
     const downloader = new Downloader(
       mockGithubApi,
-      async (file, contents) => {
+      async (category, file, contents) => {
         if (file.path === "f2.cc") {
           throw new Error("Failed to save file");
         }
-        return store(file, contents);
+        return store(category, file, contents);
       },
       {},
       {
@@ -195,7 +202,7 @@ describe("Downloader", () => {
       downloader.processRepository(DEFAULT_REPO, "master")
     ).resolves.toEqual({
       "shaf1.cc": fileIndexEntry("f1.cc"),
-      "shaf2.cc": fileIndexEntry("f2.cc", "Failed to save file"),
+      "shaf2.cc": fileIndexEntry("f2.cc", "cpp", "Failed to save file"),
       "shadir1/f3.cc": fileIndexEntry("dir1/f3.cc"),
     });
   });
@@ -369,7 +376,7 @@ describe("Downloader", () => {
       downloader.processRepository(DEFAULT_REPO, "t")
     ).resolves.toEqual({
       "shaf1.java": {
-        ...fileIndexEntry("f1.java"),
+        ...fileIndexEntry("f1.java", "java"),
         language: "java",
         size: 500,
       },

@@ -44,6 +44,7 @@ export class Downloader {
   constructor(
     private githubApi: GithubApi,
     private readonly save: (
+      category: string,
       file: Entry,
       contents: string
     ) => Promise<SaveResult>,
@@ -79,9 +80,7 @@ export class Downloader {
       let i = Math.min(
         entriesToDownload.length,
         this.options.maxFiles
-          ? this.options.maxFiles -
-              downloaded.length -
-              Object.values(this.database).length
+          ? this.options.maxFiles - downloaded.length
           : Number.POSITIVE_INFINITY
       );
       for (; i > 0; i--) {
@@ -101,8 +100,12 @@ export class Downloader {
         throw new Error(`No url for ${file.path}`);
       }
       const contents = await this.githubApi.downloadFile(file.url);
-      const result = await this.save(file, contents);
-      this.logger_.debug(`Downloaded ${file.path}`);
+      const result = await this.save(
+        getFileLanguage(file.path),
+        file,
+        contents
+      );
+      this.logger_.debug(`Downloaded ${file.path} to ${result}`);
       destOrError = { destination: result };
       this.stats_.increment(Counters.Files);
     } catch (e) {

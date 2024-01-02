@@ -4,6 +4,7 @@ import { GithubApiImpl } from "./github";
 import { Language, Repository } from "./validator";
 import chalk from "chalk";
 import dotenv from "dotenv";
+import fs, { writeFile } from "fs/promises";
 import path from "path";
 import yargs from "yargs";
 
@@ -14,17 +15,30 @@ type RepoId = {
   name: string;
 };
 
-function save(file: Entry, contents: string): Promise<string> {
-  // todo: actually save file
-  return Promise.resolve(file.path);
+function buildSaver(directory: string) {
+  return async (
+    category: string,
+    { sha }: Entry,
+    contents: string
+  ): Promise<string> => {
+    const dest = path.join(directory, category);
+    await fs.mkdir(dest, { recursive: true });
+    const filePath = path.join(dest, sha);
+    await writeFile(filePath, contents, "utf-8");
+    return path.relative(directory, filePath);
+  };
 }
 
-function dryRunStore(file: Entry, contents: string): Promise<string> {
+function dryRunStore(
+  category: string,
+  file: Entry,
+  contents: string
+): Promise<string> {
   // eslint-disable-next-line no-console
   console.info(
-    `Saving ${chalk.whiteBright(file.path)}, first 25 characters:\n${chalk.gray(
-      contents.slice(0, 25)
-    )}`
+    `Saving ${chalk.whiteBright(file.path)}, language: ${chalk.whiteBright(
+      category
+    )} first 25 characters:\n${chalk.gray(contents.slice(0, 25))}`
   );
   return Promise.resolve(file.path);
 }
@@ -36,7 +50,7 @@ async function downloadCommand(
   if (!token) {
     throw new Error("GITHUB_TOKEN environment variable is required");
   }
-  const store = params.dryRun ? dryRunStore : save;
+  const store = params.dryRun ? dryRunStore : buildSaver(params.directory);
   const databasePath = path.join(params.directory as string, params.indexName);
   const downloader = new Downloader(
     new GithubApiImpl(token),
@@ -120,6 +134,7 @@ const argv = yargs(process.argv.slice(2))
       default: false,
     },
     "max-files": {
+      alias: "c",
       description: "Maximum number of files to download",
       type: "number",
       default: 10,
