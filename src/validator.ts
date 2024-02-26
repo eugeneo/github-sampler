@@ -18,6 +18,11 @@ export enum Language {
   ALL = "all",
   CPP = "cpp",
   JAVA = "java",
+  PYTHON = "python",
+  JAVASCRIPT = "javascript",
+  TYPESCRIPT = "typescript",
+  GO = "go",
+  RUST = "rust",
   UNKNOWN = "unknown",
 }
 

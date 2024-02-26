@@ -1,178 +1,187 @@
-import { Database, Entry } from "./database";
-import { GithubApi } from "./github";
-import { getLogger } from "./logger";
-import { Counters, Stats } from "./stats";
-import { Language, Repository } from "./validator";
-import path from "path";
+import chalk from 'chalk';
+import { Database, Entry } from './database';
+import { GithubApi } from './github';
+import { Language } from './validator';
+import path from 'path';
+import z from 'zod';
 
 export type DownloaderOptions = {
   dirs?: string[];
-  maxSize: number;
-  minSize: number;
-  languages: Set<Language>;
   logSkipped?: boolean;
-  maxFiles?: number;
 };
 
 function getFileLanguage(filePath: string): Language {
   switch (path.extname(filePath)) {
-    case ".cpp":
-    case ".cc":
-    case ".h":
-    case ".hpp":
-    case ".cxx":
-    case ".hxx":
-    case ".c++":
-    case ".h++":
-    case ".hh":
-    case ".hcc":
-    case ".inl":
-    case ".ipp":
-    case ".tcc":
-    case ".tpp":
-    case ".txx":
+    case '.cpp':
+    case '.cc':
+    case '.c':
+    case '.h':
+    case '.hpp':
+    case '.cxx':
+    case '.hxx':
+    case '.c++':
+    case '.h++':
+    case '.hh':
+    case '.hcc':
+    case '.inl':
+    case '.ipp':
+    case '.tcc':
+    case '.tpp':
+    case '.txx':
       return Language.CPP;
-    case ".java":
+    case '.java':
       return Language.JAVA;
+    case '.py':
+      return Language.PYTHON;
+    case '.mjs':
+    case '.js':
+    case '.cjs':
+    case '.jsx':
+      return Language.JAVASCRIPT;
+    case '.ts':
+    case '.tsx':
+      return Language.TYPESCRIPT;
+    case '.go':
+      return Language.GO;
+    case '.rs':
+      return Language.RUST;
   }
   return Language.UNKNOWN;
 }
 
-type SaveResult = string;
+export const ProjectSchema = z.array(
+  z.object({
+    github: z.string(),
+    branch: z.string().optional().default('master'),
+    files: z.record(
+      z.nativeEnum(Language),
+      z.union([
+        z.number().positive().int(),
+        z.object({
+          count: z.number().positive().int(),
+          minSize: z.number().optional().default(0),
+          maxSize: z.number().optional().default(Number.POSITIVE_INFINITY),
+          include: z.array(z.string()).optional().default([]),
+          exclude: z.array(z.string()).optional().default([]),
+        }),
+      ]),
+    ),
+  }),
+);
+type ProjectSchema = z.infer<typeof ProjectSchema>;
+
+type Stats = {
+  total: number;
+  toDownload: number;
+  badDir: number;
+  badSize: number;
+  included: boolean;
+};
+
+function formatStats(language: string, stats: Stats) {
+  const color = stats.included ? chalk.green : chalk.gray;
+  return `    ${color(language.padEnd(15))} ${String(stats.total).padEnd(
+    6,
+  )} ${String(stats.toDownload).padEnd(6)} ${String(stats.badDir).padEnd(
+    6,
+  )} ${String(stats.badSize).padEnd(6)}`;
+}
+
+export type DownloadableEntry = Entry & {
+  language: Language;
+  repository: string;
+  branch: string;
+  url: string;
+};
 
 export class Downloader {
   constructor(
     private githubApi: GithubApi,
-    private readonly save: (
-      category: string,
-      file: Entry,
-      contents: string
-    ) => Promise<SaveResult>,
     private readonly database: Database,
-    private readonly options: DownloaderOptions
-  ) {
-    this.stats_ = new Stats(options.languages);
-  }
+  ) {}
 
-  async processRepository(
-    repository: Repository,
-    rev: string
-  ): Promise<Database> {
-    this.stats_.increment(
-      Counters.DatabaseFiles,
-      Object.keys(this.database).length
+  async prepareFileList(
+    project: ProjectSchema[number],
+  ): Promise<DownloadableEntry[]> {
+    const index = await this.githubApi.fetchTree(
+      project.github,
+      project.branch,
     );
-    const tree = await this.githubApi.fetchTree(repository, rev);
-    this.stats_.increment(Counters.TreeFiles, tree.tree.length);
-    const entriesToDownload = Object.values(
-      Object.fromEntries(
-        tree.tree
-          .filter((entry) => this.shouldDownload(entry))
-          .map((entry) => [entry.sha, entry] as const)
-      )
-    );
-    this.stats_.increment(Counters.Matching, entriesToDownload.length);
-    const downloaded = [];
-    const downloadPromises = Object.entries(this.database).map((entry) =>
-      Promise.resolve(entry)
-    );
-    while (entriesToDownload.length > 0 && downloaded.length < 1000) {
-      let i = Math.min(
-        entriesToDownload.length,
-        this.options.maxFiles
-          ? this.options.maxFiles - downloaded.length
-          : Number.POSITIVE_INFINITY
-      );
-      for (; i > 0; i--) {
-        const ind = Math.floor(Math.random() * entriesToDownload.length);
-        const [entry] = entriesToDownload.splice(ind, 1);
-        downloadPromises.push(this.processFile(entry));
+    const byLanguage = {} as Record<Language, (Entry & { url: string })[]>;
+    const langStats = {} as Record<Language, Stats>;
+    for (const entry of index.tree) {
+      if (entry.type !== 'blob') {
+        continue;
       }
-      downloaded.push(...(await Promise.all(downloadPromises)));
-    }
-    return Object.fromEntries(downloaded);
-  }
-
-  private async processFile(file: Entry): Promise<[string, Database[string]]> {
-    let destOrError: { destination: string } | { error: string } | null = null;
-    try {
-      if (!file.url) {
-        throw new Error(`No url for ${file.path}`);
+      if (entry.url === undefined) {
+        continue;
       }
-      const contents = await this.githubApi.downloadFile(file.url);
-      const result = await this.save(
-        getFileLanguage(file.path),
-        file,
-        contents
+      const language = getFileLanguage(entry.path);
+      const perLang = project.files[language];
+      if (langStats[language] === undefined) {
+        langStats[language] = {
+          total: 1,
+          included: perLang !== undefined,
+          badDir: 0,
+          badSize: 0,
+          toDownload: 0,
+        };
+      } else {
+        langStats[language].total++;
+      }
+      if (perLang === undefined) {
+        continue;
+      }
+      if (byLanguage[language] === undefined) {
+        byLanguage[language] = [];
+      }
+      if (perLang instanceof Object) {
+        const included =
+          (perLang.include.length === 0 ||
+            perLang.include.some((dir) => entry.path.startsWith(dir))) &&
+          (perLang.exclude.length === 0 ||
+            !perLang.exclude.some((dir) => entry.path.startsWith(dir)));
+        if (!included) {
+          langStats[language].badDir++;
+          continue;
+        }
+        if (
+          !entry.size ||
+          entry.size < perLang.minSize ||
+          entry.size > perLang.maxSize
+        ) {
+          langStats[language].badSize++;
+          continue;
+        }
+      }
+      byLanguage[language].push(entry as Entry & { url: string });
+    }
+    const result = [] as DownloadableEntry[];
+    for (const [lang, info] of Object.entries(project.files)) {
+      const count = info instanceof Object ? info.count : info;
+      const ents = byLanguage[lang as Language];
+      // shuffle!
+      for (let i = ents.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [ents[i], ents[j]] = [ents[j], ents[i]];
+      }
+      langStats[lang as Language].toDownload = count;
+      result.push(
+        ...ents.slice(0, count).map((entry) => ({
+          ...entry,
+          language: lang as Language,
+          repository: project.github,
+          branch: project.branch,
+        })),
       );
-      this.logger_.debug(`Downloaded ${file.path} to ${result}`);
-      destOrError = { destination: result };
-      this.stats_.increment(Counters.Files);
-    } catch (e) {
-      this.logger_.error(`Error downloading ${file.path}`, e);
-      destOrError = { error: (e as any).message ?? String(e) };
-      this.stats_.increment(Counters.Errors);
     }
-    return [
-      file.sha,
-      {
-        ...file,
-        ...destOrError,
-        language: getFileLanguage(file.path).toString(),
-      },
-    ];
+    console.info(
+      `Repository ${project.github}\n${Object.entries(langStats)
+        .map(([lang, data]) => formatStats(lang, data))
+        .sort()
+        .join('\n')}`,
+    );
+    result.sort(({ sha: shaA }, { sha: shaB }) => shaA.localeCompare(shaB));
+    return result;
   }
-
-  private shouldDownload({ path, size, sha, type }: Entry) {
-    const log = this.options.logSkipped ? this.logger_.debug : () => {};
-    if (type !== "blob") {
-      this.stats_.increment(Counters.NotFiles);
-      log(`Skipping ${path}, not a file`);
-      return false;
-    }
-    if (
-      size === undefined ||
-      size < this.options.minSize ||
-      size > this.options.maxSize
-    ) {
-      this.stats_.increment(Counters.WrongSize);
-      log(`Skipping ${path}, wrong size`);
-      return false;
-    }
-    if (
-      this.options.dirs &&
-      !this.options.dirs.some(
-        (dir) =>
-          (path.startsWith(dir) && path.length === dir.length) ||
-          path[dir.length] === "/"
-      )
-    ) {
-      this.stats_.increment(Counters.Excluded);
-      log(`Skipping ${path}, not in included paths`);
-      return false;
-    }
-    if (this.database[sha]) {
-      this.stats_.increment(Counters.AlreadyDownloaded);
-      log(`Skipping ${path}, already downloaded`);
-      return false;
-    }
-    const language = getFileLanguage(path);
-    this.stats_.histogram(Counters.Language, language);
-    if (
-      language === Language.UNKNOWN ||
-      (!this.options.languages.has(Language.ALL) &&
-        !this.options.languages.has(language))
-    ) {
-      log(`Skipping ${path}, language is: ${language}`);
-      return false;
-    }
-    return true;
-  }
-
-  stats() {
-    return this.stats_;
-  }
-
-  private readonly stats_: Stats;
-  private readonly logger_ = getLogger("downloader");
 }

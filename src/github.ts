@@ -4,17 +4,17 @@ import { Tree, TreeSchema } from "./database";
 
 export interface GithubApi {
   downloadFile(url: string): Promise<string>;
-  fetchTree(repository: Repository, sha: string): Promise<Tree>;
+  fetchTree(repository: string, sha: string): Promise<Tree>;
 }
 
 export class GithubApiImpl implements GithubApi {
   constructor(private readonly githubToken: string) {}
 
-  async fetchTree(repository: Repository, sha: string) {
+  async fetchTree(repository: string, sha: string) {
     return TreeSchema.parse(
       JSON.parse(
         await this.githubRequest(
-          `https://api.github.com/repos/${repository.owner}/${repository.name}/git/trees/${sha}?recursive=1`
+          `https://api.github.com/repos/${repository}/git/trees/${sha}?recursive=1`
         )
       )
     );
@@ -33,10 +33,7 @@ export class GithubApiImpl implements GithubApi {
   }
 
   async downloadFile(url: string): Promise<string> {
-    return await this.githubRequest(
-      url,
-      "application/vnd.github.raw"
-    );
+    return await this.githubRequest(url, "application/vnd.github.raw");
   }
 
   private async githubRequest(
