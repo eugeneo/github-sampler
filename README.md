@@ -1,3 +1,1 @@
-# GitHub Sampler
-
-Simple tool to prepare training sets from GitHub repositories.
+No longer considered viable, will be deleted. Superceded by https://github.com/uchen-ml/ml-bazel-rules
